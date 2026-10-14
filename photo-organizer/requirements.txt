@@ -1,0 +1,5 @@
+anthropic>=1.14
+pillow
+pillow-heif
+google-auth-oauthlib
+requests
