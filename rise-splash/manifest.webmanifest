@@ -1,0 +1,12 @@
+{
+  "name": "RISE – Rebuilding Infrastructure for Smart Engagement",
+  "short_name": "RISE",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#005799",
+  "theme_color": "#005799",
+  "icons": [
+    { "src": "assets/icons/rise-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icons/rise-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

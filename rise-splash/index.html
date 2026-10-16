@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RISE</title>
+  <meta name="theme-color" content="#005799">
+  <!-- App icon is the RISE logo -->
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/rise-32.png">
+  <link rel="apple-touch-icon" href="assets/icons/rise-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="splash.css">
+  <style>
+    body { margin: 0; font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; background: #f4f7fb; color: #12263f; }
+    .app-header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #005799; color: #fff; }
+    .app-header img { height: 40px; }
+    .app-header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .app-main { padding: 24px 20px; max-width: 960px; margin: 0 auto; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card b { display: block; font-size: 28px; color: #005799; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <!-- Launch splash: Thames Water -> DCL -> merge -> RISE -> app -->
+  <div id="splash" class="splash" role="status" aria-label="Starting RISE">
+    <div class="splash__stage">
+      <div class="splash__ripple"></div>
+      <div class="splash__ripple"></div>
+      <div class="splash__flash"></div>
+      <img class="splash__logo splash__logo--tw" src="assets/thames-water.png" alt="Thames Water">
+      <span class="splash__plus" aria-hidden="true">+</span>
+      <img class="splash__logo splash__logo--dcl" src="assets/dcl.svg" alt="DCL">
+      <img class="splash__logo splash__logo--rise" src="assets/rise.png" alt="RISE – Rebuilding Infrastructure for Smart Engagement">
+    </div>
+    <div class="splash__status">
+      <span class="splash__status-text">Getting everything ready…</span>
+      <div class="splash__bar"><span></span></div>
+    </div>
+    <button class="splash__skip" type="button">Skip</button>
+  </div>
+
+  <!-- The app: rendered and loaded behind the splash -->
+  <div id="app">
+    <header class="app-header">
+      <img src="assets/rise.png" alt="">
+      <h1>RISE · Rebuilding Infrastructure for Smart Engagement</h1>
+    </header>
+    <main class="app-main">
+      <div class="cards" id="cards"></div>
+    </main>
+  </div>
+
+  <script src="splash.js"></script>
+  <script>
+    const splash = RiseSplash.create();
+
+    // Everything the app needs before it opens. Replace these steps with real work
+    // (auth, API calls, config, caches); they all run while the logo animation plays.
+    async function bootApp() {
+      const steps = [
+        ["Loading assets…", () => Promise.all(
+          ["assets/thames-water.png", "assets/dcl.svg", "assets/rise.png"].map(preloadImage))],
+        ["Connecting…", () => delay(900)],
+        ["Loading your data…", async () => { await delay(1200); renderCards(); }],
+      ];
+      for (let i = 0; i < steps.length; i++) {
+        splash.setStatus(steps[i][0]);
+        await steps[i][1]();
+        splash.setProgress((i + 1) / steps.length);
+      }
+    }
+
+    function preloadImage(src) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = img.onerror = resolve;
+        img.src = src;
+      });
+    }
+
+    function delay(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+    function renderCards() {
+      const data = [["Active jobs", 128], ["Sites online", "96%"], ["Open alerts", 7], ["Engagements today", 342]];
+      document.getElementById("cards").innerHTML = data
+        .map(([label, value]) => `<div class="card">${label}<b>${value}</b></div>`).join("");
+    }
+
+    splash.play(bootApp()).catch((err) => console.error("RISE failed to start", err));
+  </script>
+</body>
+</html>
