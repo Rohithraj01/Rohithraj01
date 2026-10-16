@@ -14,7 +14,9 @@
     body { margin: 0; font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; background: #f4f7fb; color: #12263f; }
     .app-header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #005799; color: #fff; }
     .app-header img { height: 40px; }
-    .app-header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .app-header h1 { margin: 0; font-size: 18px; font-weight: 600; flex: 1; min-width: 0; }
+    .replay { padding: 8px 16px; border: 1px solid rgba(255,255,255,.6); border-radius: 999px; background: transparent; color: #fff; font: inherit; font-size: 14px; cursor: pointer; }
+    .replay:hover, .replay:focus-visible { background: rgba(255,255,255,.15); }
     .app-main { padding: 24px 20px; max-width: 960px; margin: 0 auto; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
     .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
@@ -54,6 +56,7 @@
     <header class="app-header">
       <img src="assets/rise.png" alt="">
       <h1>RISE · Rebuilding Infrastructure for Smart Engagement</h1>
+      <button class="replay" id="replay" type="button">Replay intro</button>
     </header>
     <main class="app-main">
       <div class="cards" id="cards"></div>
@@ -96,6 +99,7 @@
         .map(([label, value]) => `<div class="card">${label}<b>${value}</b></div>`).join("");
     }
 
+    document.getElementById("replay").addEventListener("click", () => location.reload());
     splash.play(bootApp()).catch((err) => console.error("RISE failed to start", err));
   </script>
 </body>
