@@ -25,12 +25,21 @@
   <!-- Launch splash: Thames Water -> DCL -> merge -> RISE -> app -->
   <div id="splash" class="splash" role="status" aria-label="Starting RISE">
     <div class="splash__stage">
-      <div class="splash__ripple"></div>
-      <div class="splash__ripple"></div>
+      <div class="splash__waves" aria-hidden="true"></div>
       <div class="splash__flash"></div>
       <img class="splash__logo splash__logo--tw" src="assets/thames-water.png" alt="Thames Water">
-      <span class="splash__plus" aria-hidden="true">+</span>
-      <img class="splash__logo splash__logo--dcl" src="assets/dcl.svg" alt="DCL">
+      <img class="splash__logo splash__logo--dcl" src="assets/dcl.png" alt="Donavalli Consulting">
+      <svg class="splash__drop" viewBox="0 0 40 56" aria-hidden="true">
+        <defs>
+          <radialGradient id="splashDropFill" cx="38%" cy="62%" r="70%">
+            <stop offset="0" stop-color="#e3f6ff"/>
+            <stop offset="0.45" stop-color="#29a8e0"/>
+            <stop offset="1" stop-color="#00467d"/>
+          </radialGradient>
+        </defs>
+        <path d="M20 1C20 1 4 23 4 36a16 16 0 0 0 32 0C36 23 20 1 20 1Z" fill="url(#splashDropFill)"/>
+        <ellipse cx="13.5" cy="36" rx="3.2" ry="6" fill="#fff" opacity="0.65"/>
+      </svg>
       <img class="splash__logo splash__logo--rise" src="assets/rise.png" alt="RISE – Rebuilding Infrastructure for Smart Engagement">
     </div>
     <div class="splash__status">
@@ -60,7 +69,7 @@
     async function bootApp() {
       const steps = [
         ["Loading assets…", () => Promise.all(
-          ["assets/thames-water.png", "assets/dcl.svg", "assets/rise.png"].map(preloadImage))],
+          ["assets/thames-water.png", "assets/dcl.png", "assets/rise.png"].map(preloadImage))],
         ["Connecting…", () => delay(900)],
         ["Loading your data…", async () => { await delay(1200); renderCards(); }],
       ];

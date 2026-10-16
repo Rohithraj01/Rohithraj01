@@ -1,4 +1,4 @@
-/* RISE launch splash: Thames Water -> DCL -> merge -> RISE -> app */
+/* RISE launch splash: Thames Water -> DCL -> merge into a water drop -> RISE -> app */
 
 :root {
   --rise-blue: #005799;
@@ -6,7 +6,6 @@
   --rise-water: #29a8e0;
   --rise-green: #4cc35a;
   --logo-size: min(34vmin, 220px);
-  --pair-offset: min(24vmin, 170px);
 }
 
 .splash {
@@ -45,40 +44,64 @@
   height: 136%;
 }
 
-.splash__plus {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: calc(var(--logo-size) * 0.28);
-  font-weight: 300;
-  opacity: 0;
-}
-
-/* Water ripple rings + flash used for the merge moment */
-.splash__ripple,
-.splash__flash {
+/* The merged logos become a water drop that falls into still water */
+.splash__drop {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: var(--logo-size);
-  height: var(--logo-size);
-  margin: calc(var(--logo-size) / -2) 0 0 calc(var(--logo-size) / -2);
-  border-radius: 50%;
+  width: calc(var(--logo-size) * 0.24);
+  height: calc(var(--logo-size) * 0.336);
+  margin: calc(var(--logo-size) * -0.23) 0 0 calc(var(--logo-size) * -0.12);
   opacity: 0;
+  transform-origin: 50% 85%;
+  filter: drop-shadow(0 4px 10px rgba(0, 20, 50, 0.35));
+  will-change: transform, opacity;
+}
+
+/* Circular waves spreading from where the drop lands (spawned by splash.js) */
+.splash__waves {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
 }
 
-.splash__ripple {
-  border: 3px solid var(--rise-water);
+.splash__wave,
+.splash__flash,
+.splash__droplet {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  pointer-events: none;
 }
 
-.splash__ripple:nth-of-type(2) {
-  border-color: var(--rise-green);
+.splash__wave,
+.splash__flash {
+  width: var(--logo-size);
+  height: var(--logo-size);
+  margin: calc(var(--logo-size) / -2) 0 0 calc(var(--logo-size) / -2);
+  opacity: 0;
+}
+
+.splash__wave {
+  border: 2px solid rgba(120, 205, 245, 0.9);
+  box-shadow: 0 0 12px rgba(41, 168, 224, 0.45), inset 0 0 10px rgba(41, 168, 224, 0.3);
+}
+
+.splash__wave--light {
+  border: 1px solid rgba(220, 245, 255, 0.75);
 }
 
 .splash__flash {
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(41, 168, 224, 0.5) 40%, transparent 70%);
+  background: radial-gradient(circle, rgba(225, 246, 255, 0.9) 0%, rgba(41, 168, 224, 0.45) 35%, transparent 65%);
+}
+
+/* Tiny splash droplets thrown up on impact */
+.splash__droplet {
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  background: radial-gradient(circle at 35% 35%, #e3f6ff, var(--rise-water));
 }
 
 .splash__status {

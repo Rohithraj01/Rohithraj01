@@ -1,7 +1,0 @@
-<!-- PLACEHOLDER: replace with the official DCL logo (keep the file name, or update the <img> in index.html). -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" role="img" aria-label="DCL">
-  <circle cx="150" cy="150" r="146" fill="#ffffff"/>
-  <circle cx="150" cy="150" r="128" fill="none" stroke="#1d2b4f" stroke-width="6"/>
-  <text x="150" y="172" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif"
-        font-size="78" font-weight="800" letter-spacing="4" fill="#1d2b4f">DCL</text>
-</svg>
