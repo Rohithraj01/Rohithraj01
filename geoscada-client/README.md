@@ -78,6 +78,57 @@ job needs. Never put the password on the command line.
 If the link leaves the trusted SCADA network, put it inside a VPN. The standard client
 connection is not meant to be exposed to the internet.
 
+## Error 0x80090331
+
+```
+Could not connect to Geo SCADA at 192.168.8.142: ... unknown status code 0x80090331
+```
+
+`0x80090331` is a Windows TLS error (`SEC_E_ALGORITHM_MISMATCH`): the PC and the server
+have **no TLS version or cipher in common**, so the encrypted connection is refused
+before Geo SCADA even sees a login. First find out what the server speaks:
+
+```powershell
+python tls_probe.py 192.168.8.142            # tests ports 443 and 5481
+python tls_probe.py 192.168.8.142 <port>     # or the port your client uses
+```
+
+**The probe says the server only speaks TLS 1.0/1.1.** This is the usual case. The
+original WebX HTTPS server (ClearSCADA and Geo SCADA 2020 and older) only supports
+TLS 1.0/1.1, and current Windows, or company Group Policy, turns those off. Fixes, best
+first:
+
+1. Don't go through WebX at all. Connect with the .NET Client API on port 5481 (this
+   tool, or `ClearSCADA.Client.dll` from your own code). It doesn't use the WebX HTTPS
+   server.
+2. On Geo SCADA 2021 or newer, connect to the **IIS reverse proxy** (HTTPS, port 443 by
+   default, TLS 1.2) instead of the WebX HTTPS port. If you connect by IP and the
+   certificate is issued to the server's name, use the name instead.
+3. Use the plain HTTP WebX port. This works, but the password crosses the network
+   unencrypted, so only do it on an isolated SCADA network.
+
+Turning TLS 1.0 back on for the whole PC also "fixes" it, but it weakens every program
+on that PC, so avoid it.
+
+**The probe says the server accepts TLS 1.2 or newer.** Then the client side is what's
+holding it back:
+
+- **.NET Framework programs**, including Python code that loads `ClearSCADA.Client.dll`
+  through pythonnet, may only offer TLS 1.0 unless strong crypto is turned on. In an
+  admin PowerShell, then restart the program:
+
+  ```powershell
+  foreach ($k in 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319',
+                 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319') {
+      Set-ItemProperty $k SchUseStrongCrypto 1 -Type DWord
+      Set-ItemProperty $k SystemDefaultTlsVersions 1 -Type DWord
+  }
+  ```
+
+- **Cipher suites.** Compare the cipher the probe printed with `Get-TlsCipherSuite` on the
+  PC. Group Policy (*Computer Configuration → Administrative Templates → Network → SSL
+  Configuration Settings*) may have removed every cipher the server offers.
+
 ## If it doesn't compile against your version
 
 Every call into the Geo SCADA API is in `GeoScadaSession.cs`. The API changes a little
