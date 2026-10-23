@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The Geo SCADA client assembly is built for .NET Framework. -->
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>geoscada</AssemblyName>
+    <RootNamespace>GeoScadaClient</RootNamespace>
+    <Nullable>disable</Nullable>
+
+    <!-- Where Geo SCADA (ClearSCADA) is installed on the machine building this tool.
+         Override with: dotnet build -p:GeoScadaDir="D:\Geo SCADA" -->
+    <GeoScadaDir Condition="'$(GeoScadaDir)' == ''">C:\Program Files\Schneider Electric\ClearSCADA</GeoScadaDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ClearSCADA.Client">
+      <HintPath>$(GeoScadaDir)\ClearSCADA.Client.dll</HintPath>
+      <!-- Copied next to geoscada.exe so the tool runs on PCs without a full Geo SCADA install. -->
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

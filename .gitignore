@@ -3,3 +3,5 @@ __pycache__/
 organized/
 client_secret*.json
 google_token.json
+bin/
+obj/
