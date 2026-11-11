@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import anthropic
@@ -21,6 +23,10 @@ except ImportError:
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".3gp", ".avi", ".mkv", ".webm", ".mts"}
 MAX_SIDE = 1024  # long edge sent to the model; plenty to recognise a scene
+# Worth trying again later: the API is busy or the connection dropped.
+BUSY = (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.InternalServerError,
+        anthropic.OverloadedError, anthropic.ServiceUnavailableError)
+ROUNDS = 5
 
 PROMPT = """You are organising a personal photo library into albums.
 Look at the photo and choose the ONE album it fits best.
@@ -82,7 +88,7 @@ class Classifier:
         self.model = model
         self.cache_path = cache_path
         self.workers = workers
-        self.client = anthropic.Anthropic()
+        self.client = anthropic.Anthropic(max_retries=5)
         self.lock = threading.Lock()
         self.cache = {}
         if os.path.exists(cache_path):
@@ -135,21 +141,54 @@ class Classifier:
 
     def classify(self, items, progress=print):
         """Classify items (each has .sha, .path, .name). Results cached by file hash,
-        so re-running after an interruption only processes what's left."""
+        so re-running after an interruption only processes what's left.
+
+        When the API says it's busy (rate limit), those photos are tried again after a
+        pause, fewer at a time, instead of being left Unsorted."""
         todo = [it for it in items if it.sha not in self.cache]
         progress(f"{len(items) - len(todo)} already classified, {len(todo)} to go")
-        done = 0
-        with ThreadPoolExecutor(self.workers) as pool:
+        workers, wait = self.workers, 0
+        for attempt in range(ROUNDS):
+            if not todo:
+                break
+            if attempt:
+                progress(f"  the API was busy for {len(todo)} photos: trying them again in "
+                         f"{wait} s, {workers} at a time")
+                time.sleep(wait)
+            todo, wait = self._round(todo, workers, progress)
+            workers = max(1, workers // 2)
+        self._save()
+        if todo:
+            progress(f"{len(todo)} photos couldn't be classified because the API stayed busy. "
+                     "Run the same command again later: everything else is saved.")
+        return {it.sha: self.cache.get(it.sha) for it in items}
+
+    def _round(self, todo, workers, progress):
+        busy, wait, done, errors = [], 20, 0, Counter()
+        with ThreadPoolExecutor(workers) as pool:
             futures = {pool.submit(self._ask, it): it for it in todo}
             for fut in as_completed(futures):
                 it = futures[fut]
                 try:
                     result = fut.result()
-                except anthropic.AuthenticationError:
-                    pool.shutdown(cancel_futures=True)
-                    raise
-                except anthropic.APIError as e:  # rate limits etc. -- retry on next run
-                    progress(f"  skipped {it.name}: {e}")
+                except BUSY as e:
+                    busy.append(it)
+                    after = getattr(getattr(e, "response", None), "headers", {}).get("retry-after")
+                    if after and str(after).isdigit():
+                        wait = max(wait, min(int(after), 300))
+                    continue
+                except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                        anthropic.NotFoundError) as e:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    raise SystemExit(f"Claude API: {e.message}\nCheck ANTHROPIC_API_KEY and --model.")
+                except anthropic.APIStatusError as e:  # this photo, or the account (e.g. no credit)
+                    errors[e.message] += 1
+                    if errors[e.message] <= 3:
+                        progress(f"  skipped {it.name}: {e.message}")
+                    if not done and errors[e.message] >= 5:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        self._save()
+                        raise SystemExit(f"Every request to the Claude API fails: {e.message}")
                     continue
                 with self.lock:
                     self.cache[it.sha] = result
@@ -157,5 +196,7 @@ class Classifier:
                     if done % 25 == 0:
                         self._save()
                         progress(f"  {done}/{len(todo)} classified")
-        self._save()
-        return {it.sha: self.cache.get(it.sha) for it in items}
+        for msg, n in errors.items():
+            if n > 3:
+                progress(f"  ... and {n - 3} more skipped: {msg}")
+        return busy, wait

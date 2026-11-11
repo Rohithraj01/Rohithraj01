@@ -2,8 +2,8 @@
 
 Merges two Google Photos accounts into one clean library:
 
-1. **Finds duplicates** between the two accounts: identical files, "Storage saver"
-   copies and (optionally) look-alikes.
+1. **Finds duplicates** between the two accounts and inside each one, by looking at the
+   pictures themselves (see [How duplicates are found](#how-duplicates-are-found)).
 2. **Understands each photo** with Claude's vision and puts it in the right album
    (Family & Friends, Travel & Places, Food & Drinks, Screenshots, and so on). It also
    writes a short caption so the photo is easy to search for later.
@@ -24,11 +24,17 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY=sk-ant-...      # from https://platform.claude.com
 ```
 
+On Windows PowerShell use `$env:ANTHROPIC_API_KEY = "sk-ant-..."`. The duplicate finder on its
+own needs no API key.
+
 ## 1. Export both accounts
 
 At [takeout.google.com](https://takeout.google.com): *Deselect all → Google Photos →
 Next → Create export*. Do this once in each account, then unzip into `takeout-A/` (the
-main account you keep) and `takeout-B/` (the second account).
+main account you keep) and `takeout-B/` (the second account). A big export comes as several
+zips: unzip **all** of them into that account's folder. It doesn't matter whether they end
+up in one folder or side by side; a photo's date is found even when its JSON file landed in
+another zip.
 
 ## 2. Organise
 
@@ -42,10 +48,17 @@ You get:
 |---|---|
 | `organized/gallery.html` | browse every unique photo, grouped by album, with captions |
 | `organized/Albums/<album>/` | the photos sorted into folders (hard links, so no extra disk space) |
-| `organized/duplicates.html` | photos in account B that are already in A, each with an *open & delete* link |
+| `organized/duplicates.html` | the duplicates, side by side, with tick boxes and *Open in Google Photos* links |
 | `organized/library.json` | everything the app worked out about each photo |
 
-It's safe to stop and re-run: photos already classified aren't sent again.
+Only duplicates the app is certain about are left out of the merged library. The ones
+marked *check* stay in, so nothing is lost if one turns out to be a different photo.
+
+It's safe to stop and re-run: photos already classified aren't sent again, and files
+already read aren't read again. If the Claude API says it's busy (rate limit), those photos
+are tried again after a pause, fewer at a time, instead of ending up *Unsorted*. If the
+API rejects every request (for example no credit left), the app stops at once with the
+reason instead of going through every photo.
 
 **Cost:** each photo is one request to the Claude API. With the default model
 (`claude-opus-5-5`) a rough estimate is about **1 cent per photo** (~$100 per 10,000).
@@ -84,11 +97,65 @@ because Google doesn't allow it. `gallery.html` still shows which album each one
 
 ## Just the duplicate list
 
-`find_duplicates.py` is the stand-alone duplicate finder. It needs no API key or
-installs:
+`find_duplicates.py` is the duplicate finder on its own. It needs no API key:
 
 ```bash
 python3 find_duplicates.py takeout-A takeout-B     # -> report.html, report.csv
+python3 find_duplicates.py takeout-A               # duplicates inside one account
 ```
 
+Open `report.html` in a browser. Each duplicate is shown next to the copy that is kept
+(green = keep, red = delete), with its date, size, and a link to it in Google Photos.
+Certain duplicates are ticked already; the button at the top downloads the ticked ones as a
+list. Your ticks are remembered in that browser.
+
 Deleted items stay in the Google Photos Bin for 60 days.
+
+## How duplicates are found
+
+The first version matched only identical files, or the same file name with the very same
+date, so most real copies were missed. Now every photo is looked at:
+
+1. Each picture gets a small fingerprint of what it looks like. Pictures with similar
+   fingerprints, and files with the same name and date, are compared.
+2. Those pairs are compared pixel by pixel at 384 pixels, after evening out brightness and
+   contrast. A copy that was saved again differs a little everywhere; a different shot
+   (a burst, or a screenshot one message further on) differs strongly in one place.
+
+So these are found: identical files, *Storage saver* copies, HEIC photos saved as JPG,
+PNG saved as JPG, WhatsApp copies (other name, other date, no EXIF), dates off by a time
+zone, photos turned with an EXIF tag, photos without a JSON file, and copies inside one
+account.
+
+| label | meaning | ticked? |
+|---|---|---|
+| identical | the very same file | yes |
+| same | the same photo saved again (smaller, re-compressed, other format or name) | yes |
+| check | probably the same photo, but edited, cropped, turned, taken seconds apart, or the copy that would go is the bigger one | no, have a look |
+
+Not reported: burst shots (`IMG_1234` and `IMG_1235` are never the same photo), two phones
+photographing the same moment, and an `-edited` version next to its original (in Google
+Photos they are one item). Copies in album folders of the export are counted once, because
+Google Photos has them once.
+
+Limits: videos are matched only as identical files or by the same name and date. RAW files
+that can't be opened are matched the same way. Two frames of a perfectly still scene can't
+be told apart and are reported as the same photo.
+
+Tested on two sample exports built from real photos and video frames (`tests/` has a
+smaller self-contained version): the old matcher found 43 of 93 and 0 of 42 copies, the new
+one finds all of them. No screenshot that differs by one message or one switch, and no
+burst of people walking, was taken for a copy. The only look-alikes reported as the same
+photo were video frames a split second apart: identical frames, and one pair whose dates
+were hours apart. Frames dated seconds apart go to *check*. Speed: about 20 ms per
+12-megapixel photo on 4 cores; a re-run reads only new files.
+
+## Checks
+
+```bash
+python3 tests/test_photo_organizer.py
+```
+
+Builds two small Takeout exports from generated pictures, with every kind of copy above and
+look-alikes that must not match, and checks the report, the organizer, and that a busy or
+failing Claude API is handled. No downloads, no API calls.

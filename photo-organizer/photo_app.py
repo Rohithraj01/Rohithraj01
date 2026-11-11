@@ -78,32 +78,40 @@ figcaption{padding:4px 6px;font-size:12px}small{color:#777;font-weight:normal}
 def cmd_organize(a):
     from classify import Classifier, load_albums
 
+    fd.need_pictures()
     os.makedirs(a.out, exist_ok=True)
-    print("Scanning account A:", a.keep_dir)
-    keep = fd.dedupe_within(fd.scan(a.keep_dir))
-    print("Scanning account B:", a.clean_dir)
-    clean = fd.dedupe_within(fd.scan(a.clean_dir))
+    report = os.path.join(a.out, "duplicates")
+    cache = fd.Cache(report + "_files/fingerprints.sqlite")
+    items = fd.load_account(a.keep_dir, "A", cache, a.file_workers)
+    if a.clean_dir:
+        items += fd.load_account(a.clean_dir, "B", cache, a.file_workers)
+    result = fd.find_all(items, a.file_workers)
+    fd.write_report(result, report, a.file_workers)
+    fd.print_summary(result, report)
 
-    matches = fd.find_matches(keep, clean, a.similar)
-    fd.write_reports(matches, len(keep), len(clean), os.path.join(a.out, "duplicates"))
-    dup_shas = {it.sha for it, _, _ in matches}
-    library = [(it, "A") for it in keep] + [(it, "B") for it in clean if it.sha not in dup_shas]
-    print(f"\n{len(matches)} duplicates found; merged library has {len(library)} unique items")
+    # Only certain duplicates are left out. A "check" one stays in, so nothing is lost
+    # if it turns out to be a different photo.
+    drop = {id(it) for it in result.removable()}
+    maybe = {id(r["item"]): result.keeper[r["group"]].path for r in result.rows
+             if r["action"] == "delete" and r["level"] == "check"}
+    library = [it for it in items if id(it) not in drop]
+    print(f"\nThe merged library has {len(library):,} unique photos and videos")
 
     albums = load_albums(a.albums)
     clf = Classifier(albums, a.model, os.path.join(a.out, "classifications.json"), a.workers)
     print(f"Classifying with {a.model} ...")
-    results = clf.classify([it for it, _ in library])
+    results = clf.classify(library)
 
     used, entries = set(), []
-    for it, src in library:
+    for it in library:
         r = results.get(it.sha) or {}
         album = r.get("album") or UNSORTED
-        dest = place(it.path, os.path.join(a.out, "Albums", album), used)
-        entries.append({"sha": it.sha, "name": it.name, "path": os.path.abspath(it.path),
-                        "organized_path": os.path.abspath(dest), "account": src,
+        shown = it.edited or it.path  # the edited version is what Google Photos shows
+        dest = place(shown, os.path.join(a.out, "Albums", album), used)
+        entries.append({"sha": it.sha, "name": os.path.basename(shown), "path": os.path.abspath(shown),
+                        "organized_path": os.path.abspath(dest), "account": it.account,
                         "album": album, "caption": r.get("caption", ""),
-                        "google_photos_url": it.url})
+                        "google_photos_url": it.url, "maybe_duplicate_of": maybe.get(id(it))})
     with open(os.path.join(a.out, "library.json"), "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=1)
     write_gallery(entries, a.out)
@@ -112,9 +120,9 @@ def cmd_organize(a):
     for album, n in Counter(e["album"] for e in entries).most_common():
         print(f"  {n:6d}  {album}")
     print(f"\nOpen {os.path.join(a.out, 'gallery.html')} to browse, and "
-          f"{os.path.join(a.out, 'duplicates.html')} for the duplicates.")
+          f"{report}.html for the duplicates.")
     if any(e["album"] == UNSORTED for e in entries):
-        print("Some items are Unsorted (unreadable or skipped). Re-run to retry them.")
+        print("Some items are Unsorted (unreadable, or the API was busy). Re-run to retry them.")
 
 
 def cmd_upload(a):
@@ -145,14 +153,15 @@ def main():
 
     o = sub.add_parser("organize", help="dedupe both accounts and sort photos into albums")
     o.add_argument("keep_dir", help="Takeout folder of account A (the main account)")
-    o.add_argument("clean_dir", help="Takeout folder of account B (the second account)")
+    o.add_argument("clean_dir", nargs="?", help="Takeout folder of account B (the second account)")
     o.add_argument("--out", default="organized")
     o.add_argument("--albums", default=os.path.join(HERE, "albums.json"),
                    help="JSON of album name -> what belongs in it")
     o.add_argument("--model", default="claude-opus-5-5")
-    o.add_argument("--workers", type=int, default=8)
-    o.add_argument("--similar", action="store_true",
-                   help="also treat visually near-identical photos as duplicates")
+    o.add_argument("--workers", type=int, default=4, help="photos sent to Claude at the same time")
+    o.add_argument("--file-workers", type=int, default=fd.default_workers(),
+                   help="processes reading files at the same time")
+    o.add_argument("--similar", action="store_true", help=argparse.SUPPRESS)  # always on now
     o.set_defaults(func=cmd_organize)
 
     u = sub.add_parser("upload", help="upload the organised albums into Google Photos")
