@@ -10,6 +10,7 @@ import csv
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -303,6 +304,72 @@ def test_organize_keeps_unsure_copies():
         assert os.path.exists(os.path.join(out, "duplicates.html"))
     finally:
         classify.Classifier._ask = orig
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def make_video(path, motion, seed, scale=320, q=4, fps=12, n=24):
+    """A tiny 2-second test video: a moving ball and a fixed block, encoded with ffmpeg."""
+    frames = tempfile.mkdtemp(prefix="vf-")
+    try:
+        for i in range(n):
+            im = Image.new("RGB", (320, 240), (10, 20, 60))
+            d = ImageDraw.Draw(im)
+            x = {"lr": 10 + i * 11, "rl": 300 - i * 11}.get(motion, 150)
+            y = 100 + (i * 7) % 60
+            d.ellipse((x, y, x + 36, y + 36), fill=(240, 140, 20))
+            d.rectangle((20 + seed * 7, 20, 60 + seed * 7, 50), fill=(20, 200, 120))
+            im.save(os.path.join(frames, f"f{i:02d}.png"))
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", str(fps),
+                        "-i", os.path.join(frames, "f%02d.png"), "-vf", f"scale={scale}:-2",
+                        "-c:v", "mpeg4", "-q:v", str(q), path],
+                       check=True, capture_output=True)
+    finally:
+        shutil.rmtree(frames, ignore_errors=True)
+    return path
+
+
+def test_video_duplicates():
+    if not shutil.which("ffmpeg"):
+        print("  (skipped: ffmpeg not installed)", end=" ")
+        return
+    root = tempfile.mkdtemp(prefix="vid-")
+    try:
+        gp = ("Takeout", "Google Photos")
+        A = os.path.join(root, "A", *gp, "Photos from 2024")
+        B = os.path.join(root, "B", *gp, "Photos from 2024")
+        os.makedirs(A)
+        os.makedirs(B)
+        orig = make_video(os.path.join(A, "VID_3001.mp4"), "lr", 1)
+        sidecar(A, "VID_3001.mp4", T0, "v1")
+        make_video(os.path.join(A, "VID_3002.mp4"), "static", 3)  # unrelated video in A
+        sidecar(A, "VID_3002.mp4", T0 + 5000, "v2")
+        # account B: a re-encoded re-share (different name + date), a byte copy, a different clip
+        make_video(os.path.join(B, "clip_shared.mp4"), "lr", 1, scale=192, q=12)
+        sidecar(B, "clip_shared.mp4", T0 + 3 * 86400, "vb1")
+        shutil.copy(orig, os.path.join(B, "VID_3001.mp4"))
+        sidecar(B, "VID_3001.mp4", T0, "vb2")
+        make_video(os.path.join(B, "VID_7777.mp4"), "rl", 1)  # different motion, same length
+        sidecar(B, "VID_7777.mp4", T0 + 9000, "vb3")
+
+        out = os.path.join(root, "report")
+        _, result = run(root, out)
+        by_name = {}
+        keep = {r["group"]: r["item"].path for r in result.rows if r["action"] == "keep"}
+        for r in result.rows:
+            if r["action"] == "delete":
+                by_name[os.path.basename(r["item"].path)] = (
+                    r["level"], os.path.basename(keep[r["group"]]))
+        problems = []
+        if by_name.get("clip_shared.mp4", (None,))[0] != "same":
+            problems.append(f"re-encoded video: {by_name.get('clip_shared.mp4')}, want same")
+        if by_name.get("VID_3001.mp4", (None,))[0] != "identical":
+            problems.append(f"byte copy: {by_name.get('VID_3001.mp4')}, want identical")
+        if "VID_7777.mp4" in by_name:
+            problems.append(f"different clip was matched: {by_name['VID_7777.mp4']}")
+        for level, kept in by_name.values():
+            assert kept in ("VID_3001.mp4",), f"unexpected keeper {kept}"
+        assert not problems, "\n  " + "\n  ".join(problems)
+    finally:
         shutil.rmtree(root, ignore_errors=True)
 
 

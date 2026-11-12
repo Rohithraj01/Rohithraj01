@@ -103,6 +103,17 @@ FLAT = 4.0            # contrast (grey levels) below which a picture is nearly b
 TZ_SPAN = 14 * 3600 + 1800
 LEVELS = {"identical": 0, "same": 1, "check": 2}
 
+# Videos are matched by sampling a handful of frames and comparing them. A re-encoded or
+# re-shared copy keeps almost the same length and every sampled frame matches closely
+# (worst frame >= 0.95); two different clips of the same length score well under 0.90 even
+# when the scene is similar, so the gap is clear.
+VFRAMES = 7           # frames sampled across a video (fewer for a very short one)
+VSIDE = 48            # side of each frame's small grey thumbnail, compared frame by frame
+VSAME_MIN = 0.95      # same video: worst sampled frame at least this alike ...
+VSAME_MED = 0.975     # ... and the middle frame at least this
+VCHECK_MIN = 0.90     # probably the same (shown for a look): worst frame at least this ...
+VCHECK_MED = 0.95     # ... and the middle frame at least this
+
 
 def name_key(title):
     """'IMG_1234(1)-edited.HEIC' -> 'img_1234': copies keep the name but not the extension."""
@@ -137,7 +148,8 @@ def time_relation(t1, t2):
 
 class Item:
     __slots__ = ("path", "account", "name", "title", "folder", "size", "mtime", "sha", "taken",
-                 "url", "video", "w", "h", "ph", "dh", "thumb", "contrast", "copies", "edited")
+                 "url", "video", "w", "h", "ph", "dh", "thumb", "contrast", "copies", "edited",
+                 "dur", "vframes")
 
     def __init__(self, path, account, st):
         self.path = path
@@ -150,6 +162,8 @@ class Item:
         self.w = self.h = self.ph = self.dh = self.thumb = None
         self.contrast = 0.0
         self.copies = 1
+        self.dur = None       # video length in seconds
+        self.vframes = None   # list of small grey frames (numpy uint8), for video compare
 
     @property
     def pixels(self):
@@ -324,9 +338,62 @@ def _look(src):
             "thumb": np.rint(t).astype(np.uint8).tobytes(), "exif": _exif_time(exif)}
 
 
+def _probe_duration(src):
+    """A video's length in seconds and its frame size, with ffprobe."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-of", "json",
+                            "-show_entries", "format=duration:stream=duration,width,height", src],
+                           capture_output=True, text=True, timeout=120)
+        info = json.loads(r.stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, None, None
+    stream = (info.get("streams") or [{}])[0]
+    dur = (info.get("format") or {}).get("duration") or stream.get("duration")
+    try:
+        dur = float(dur)
+    except (TypeError, ValueError):
+        dur = None
+    return dur, (int(stream.get("width") or 0) or None), (int(stream.get("height") or 0) or None)
+
+
+def _video_frame(src, t):
+    """One frame at time t (seconds) as a small grey VSIDE x VSIDE thumbnail, or None."""
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", src, "-frames:v", "1",
+                            "-vf", "scale=256:-2", "-f", "mjpeg", "-"], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode or not r.stdout:
+        return None
+    try:
+        with Image.open(io.BytesIO(r.stdout)) as im:
+            g = _flatten(ImageOps.exif_transpose(im)).convert("L")
+        return np.asarray(g.resize((VSIDE, VSIDE), Image.Resampling.BOX), np.uint8).tobytes()
+    except Exception:
+        return None
+
+
+def _video_look(src):
+    """Sample a few frames across a video so copies can be matched by what they show."""
+    if not shutil.which("ffmpeg"):
+        return {"vbad": 1}
+    dur, w, h = _probe_duration(src)
+    if not dur or dur <= 0:
+        return {"vbad": 1}
+    n = VFRAMES if dur >= 2 else 3
+    frames = []
+    for k in range(n):
+        f = _video_frame(src, dur * (k + 0.5) / n)
+        if f is None:
+            return {"vbad": 1}
+        frames.append(f.hex())
+    return {"dur": round(dur, 3), "w": w, "h": h, "vframes": frames}
+
+
 def fingerprint(path):
-    """Read a file once: its SHA-256, and for pictures what they look like."""
-    visual = Image is not None and os.path.splitext(path)[1].lower() in IMAGE_EXT
+    """Read a file once: its SHA-256, and for pictures/videos what they look like."""
+    ext = os.path.splitext(path)[1].lower()
+    visual = Image is not None and ext in IMAGE_EXT
     h = hashlib.sha256()
     data = bytearray() if visual else None
     try:
@@ -345,6 +412,11 @@ def fingerprint(path):
             out.update(_look(io.BytesIO(data) if data is not None else path))
         except Exception:
             out["bad"] = 1  # can't be opened: compared by name and date only
+    elif Image is not None and ext in VIDEO_EXT:
+        try:
+            out.update(_video_look(path))
+        except Exception:
+            out["vbad"] = 1  # unreadable: compared by name and date only
     return out
 
 
@@ -393,8 +465,19 @@ def _apply(it, fp):
         thumb = fp["thumb"]
         it.thumb = bytes.fromhex(thumb) if isinstance(thumb, str) else thumb
         it.contrast = float(np.frombuffer(it.thumb, np.uint8).std())
+    if "vframes" in fp:
+        it.dur = fp.get("dur")
+        it.vframes = [np.frombuffer(bytes.fromhex(s), np.uint8).reshape(VSIDE, VSIDE)
+                      for s in fp["vframes"]]
+        if not it.w and fp.get("w"):
+            it.w, it.h = fp["w"], fp["h"]
     if it.taken is None and fp.get("exif"):
         it.taken = fp["exif"]
+
+
+def _needs_video(it, fp, have_ffmpeg):
+    """A cached video from before this feature (no frames yet) is read again, once."""
+    return have_ffmpeg and it.video and "vframes" not in fp and "vbad" not in fp
 
 
 def default_workers():
@@ -421,10 +504,11 @@ def load_account(root, account, cache=None, workers=1, progress=print):
     progress(f"Scanning account {account}: {root}")
     items = scan(root, account)
     cache = cache or Cache(None)
+    have_ffmpeg = shutil.which("ffmpeg") is not None
     todo = []
     for it in items:
         fp = cache.get(it)
-        if fp:
+        if fp and not _needs_video(it, fp, have_ffmpeg):
             _apply(it, fp)
         else:
             todo.append(it)
@@ -448,6 +532,10 @@ def load_account(root, account, cache=None, workers=1, progress=print):
         progress(f"  {heic} HEIC photos can't be opened: run  pip install pillow-heif  and try again")
     elif bad:
         progress(f"  {len(bad)} pictures couldn't be opened; they are compared by name and date only")
+    videos = sum(it.video for it in items)
+    if videos and not have_ffmpeg:
+        progress(f"  {videos} videos: install ffmpeg to match re-encoded copies by content "
+                 "(without it, videos match only by identical file or the same name and date)")
     return collapse([it for it in items if it.sha])
 
 
@@ -503,6 +591,17 @@ def candidate_pairs(items):
             for x in range(len(idx)):
                 for y in range(x + 1, len(idx)):
                     pairs.add((idx[x], idx[y]))
+    # videos: compare only ones of nearly the same length (a re-encode keeps the length)
+    vids = sorted((i for i, it in enumerate(items) if it.video and it.vframes),
+                  key=lambda i: items[i].dur or 0.0)
+    for x in range(len(vids)):
+        da = items[vids[x]].dur or 0.0
+        for y in range(x + 1, len(vids)):
+            db = items[vids[y]].dur or 0.0
+            if db - da > max(1.0, 0.05 * da):  # sorted by length: stop once too far apart
+                break
+            i, j = sorted((vids[x], vids[y]))
+            pairs.add((i, j))
     return pairs
 
 
@@ -604,6 +703,50 @@ def _kind(it):
     return "video" if it.video else "raw" if ext in RAW_EXT else "picture"
 
 
+def _vz(frame):
+    t = frame.astype(np.float32)
+    t -= t.mean()
+    n = float(np.sqrt((t * t).sum()))
+    return t / n if n else t
+
+
+def compare_video(fa, fb):
+    """(worst, middle) frame correlation between two videos' sampled frames, or None.
+    Each frame is matched to the nearest of its neighbours, to allow a tiny offset."""
+    if not fa or not fb:
+        return None
+    za, zb = [_vz(f) for f in fa], [_vz(f) for f in fb]
+    best = []
+    for i in range(len(za)):
+        cs = [float((za[i] * zb[j]).sum()) for j in (i - 1, i, i + 1) if 0 <= j < len(zb)]
+        if cs:
+            best.append(max(cs))
+    if not best:
+        return None
+    best.sort()
+    return best[0], best[len(best) // 2]
+
+
+def decide_video(a, b):
+    """('same' | 'check', reason) for two different video files, or None."""
+    if not (a.dur and b.dur):
+        return None
+    dd = abs(a.dur - b.dur)
+    v = compare_video(a.vframes, b.vframes)
+    if v is None:
+        return None
+    worst, mid = v
+    ea, eb = (os.path.splitext(x.name)[1].lstrip(".").upper() for x in (a, b))
+    note = f", {ea} and {eb}" if ea != eb else ""
+    if dd <= max(0.5, 0.02 * min(a.dur, b.dur)) and worst >= VSAME_MIN and mid >= VSAME_MED:
+        smaller = " (one is a smaller copy)" if a.pixels and b.pixels and max(
+            a.pixels, b.pixels) > 1.2 * min(a.pixels, b.pixels) else ""
+        return "same", f"same video, re-encoded or re-saved{note}{smaller}"
+    if dd <= max(1.0, 0.05 * min(a.dur, b.dur)) and worst >= VCHECK_MIN and mid >= VCHECK_MED:
+        return "check", f"looks like the same video{note}"
+    return None
+
+
 def compare(items, pairs, workers=1):
     """Judge each candidate pair: [(i, j, level, reason, score)]."""
     found, looks = [], []
@@ -613,9 +756,16 @@ def compare(items, pairs, workers=1):
         if a.sha == b.sha:
             found.append((i, j, "identical", "identical file", 2.0))
             continue
+        if different_shots(a.title, b.title):  # IMG_1234 and IMG_1235 are two recordings
+            continue
         named = name_key(a.title) == name_key(b.title) and time_relation(a.taken, b.taken) == "same"
+        if a.video and b.video and a.vframes and b.vframes:  # match videos by their frames
+            v = decide_video(a, b)
+            if v:
+                found.append((i, j, v[0], v[1], 1.5 if v[0] == "same" else 0.6))
+            continue
         if a.thumb is None or b.thumb is None:
-            # videos, RAW files and pictures that can't be opened: name and date only.
+            # videos without frames, RAW files and pictures that can't be opened: name/date.
             # A RAW file and its JPG, or a Live Photo's picture and video, are kept apart.
             if named and _kind(a) == _kind(b):
                 if a.thumb is None and b.thumb is None:
@@ -624,8 +774,6 @@ def compare(items, pairs, workers=1):
                 else:
                     found.append((i, j, "check", "same name and date, but one of them can't be "
                                   "opened to compare the pictures", 0.5))
-            continue
-        if different_shots(a.title, b.title):
             continue
         for x, it in ((i, a), (j, b)):
             if x not in zs:
@@ -788,8 +936,9 @@ SECTIONS = [
      "Very probably the same photo, but edited, turned, or the copy that would go is the "
      "bigger one. Tick the ones you want to delete."),
     ("B in A", "In account B and already in account A",
-     "Checked pixel by pixel: safe to delete from account B without looking. If you move "
-     "everything from B into A and then empty B, you don't need to delete these one by one."),
+     "Checked pixel by pixel (photos) or frame by frame (videos): safe to delete from account "
+     "B without looking. If you move everything from B into A and then empty B, you don't need "
+     "to delete these one by one."),
     ("twice in A", "Twice in account A", "The same photo twice; the bigger copy is kept."),
     ("twice in B", "Twice in account B", "The same photo twice; the bigger copy is kept."),
 ]
@@ -836,8 +985,11 @@ def write_report(result, out, workers=1, progress=print):
             cls = "keep"
         else:
             checked = "" if r["level"] == "check" else " checked"
+            label = LABEL[r["level"]]
+            if it.video and r["level"] in ("same", "check"):
+                label = "Same video" if r["level"] == "same" else "Same video?"
             head = (f'<label><input type="checkbox" data-id="{data_id}"{checked}> '
-                    f'<b>Delete</b></label> <span class="lvl {r["level"]}">{LABEL[r["level"]]}</span>')
+                    f'<b>Delete</b></label> <span class="lvl {r["level"]}">{label}</span>')
             cls = "del"
         why = f'<div class="why">{html.escape(r["reason"])}</div>' if r["reason"] else ""
         return (f'<figure class="{cls}"><a href="{html.escape(_href(it.path, base))}" target="_blank">'
@@ -960,7 +1112,9 @@ def need_pictures():
 
 def print_summary(result, out, progress=print):
     c = result.counts()
-    size = sum(r["item"].size for r in result.rows if r["action"] == "delete" and r["level"] != "check")
+    dels = [r["item"] for r in result.rows if r["action"] == "delete" and r["level"] != "check"]
+    size = sum(it.size for it in dels)
+    vids = sum(it.video for it in dels)
     progress("")
     progress(f"{sum(1 for it in result.items if it.account == 'A'):,} photos and videos in account A"
              + (f", {sum(1 for it in result.items if it.account == 'B'):,} in account B"
@@ -969,7 +1123,8 @@ def print_summary(result, out, progress=print):
     progress(f"  {c.get('twice in A', 0):6,}  twice in account A")
     progress(f"  {c.get('twice in B', 0):6,}  twice in account B")
     progress(f"  {c.get('check', 0):6,}  to have a quick look at")
-    progress(f"Deleting the certain ones frees about {size / 1e9:.2f} GB.")
+    progress(f"Deleting the certain ones frees about {size / 1e9:.2f} GB"
+             + (f" ({vids:,} of them videos)." if vids else "."))
     progress(f"Report: {out}.html (open it in a browser) and {out}.csv")
 
 
@@ -981,6 +1136,8 @@ def main():
     ap.add_argument("--out", default="report", help="report path without extension")
     ap.add_argument("--workers", type=int, default=default_workers(),
                     help="processes reading files at the same time")
+    ap.add_argument("--open", action="store_true", dest="open_report",
+                    help="open the report in your browser when it is ready")
     ap.add_argument("--similar", action="store_true", help=argparse.SUPPRESS)  # always on now
     a = ap.parse_args()
     need_pictures()
@@ -991,6 +1148,9 @@ def main():
     result = find_all(items, a.workers)
     write_report(result, a.out, a.workers)
     print_summary(result, a.out)
+    if a.open_report:
+        import webbrowser
+        webbrowser.open(Path(os.path.abspath(a.out + ".html")).as_uri())
 
 
 if __name__ == "__main__":

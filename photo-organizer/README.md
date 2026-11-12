@@ -3,7 +3,7 @@
 Merges two Google Photos accounts into one clean library:
 
 1. **Finds duplicates** between the two accounts and inside each one, by looking at the
-   pictures themselves (see [How duplicates are found](#how-duplicates-are-found)).
+   photos and videos themselves (see [How duplicates are found](#how-duplicates-are-found)).
 2. **Understands each photo** with Claude's vision and puts it in the right album
    (Family & Friends, Travel & Places, Food & Drinks, Screenshots, and so on). It also
    writes a short caption so the photo is easy to search for later.
@@ -25,7 +25,9 @@ export ANTHROPIC_API_KEY=sk-ant-...      # from https://platform.claude.com
 ```
 
 On Windows PowerShell use `$env:ANTHROPIC_API_KEY = "sk-ant-..."`. The duplicate finder on its
-own needs no API key.
+own needs no API key. To match **video** copies by content, also install **ffmpeg** and have
+it on your PATH (`winget install ffmpeg`, `brew install ffmpeg`, or `apt install ffmpeg`);
+photos don't need it.
 
 ## 1. Export both accounts
 
@@ -102,12 +104,13 @@ because Google doesn't allow it. `gallery.html` still shows which album each one
 ```bash
 python3 find_duplicates.py takeout-A takeout-B     # -> report.html, report.csv
 python3 find_duplicates.py takeout-A               # duplicates inside one account
+python3 find_duplicates.py takeout-A takeout-B --open   # also open the report when done
 ```
 
-Open `report.html` in a browser. Each duplicate is shown next to the copy that is kept
-(green = keep, red = delete), with its date, size, and a link to it in Google Photos.
-Certain duplicates are ticked already; the button at the top downloads the ticked ones as a
-list. Your ticks are remembered in that browser.
+Open `report.html` in a browser (or pass `--open`). Each duplicate is shown next to the
+copy that is kept (green = keep, red = delete), with its date, size, and a link to it in
+Google Photos. Certain duplicates are ticked already; the button at the top downloads the
+ticked ones as a list. Your ticks are remembered in that browser.
 
 Deleted items stay in the Google Photos Bin for 60 days.
 
@@ -127,6 +130,14 @@ PNG saved as JPG, WhatsApp copies (other name, other date, no EXIF), dates off b
 zone, photos turned with an EXIF tag, photos without a JSON file, and copies inside one
 account.
 
+**Videos** are matched the same way. A handful of frames are sampled across each video and
+compared frame by frame, so a re-encoded (*Storage saver*) or re-shared copy with another
+name and date is found, not just a byte-identical one. Two different clips of the same
+length do not match, because at least one sampled frame differs clearly. This needs
+**ffmpeg** on your PATH (`winget install ffmpeg`, `brew install ffmpeg`, or
+`apt install ffmpeg`); without it, videos still match by identical file or the same name
+and date, and the app says so.
+
 | label | meaning | ticked? |
 |---|---|---|
 | identical | the very same file | yes |
@@ -138,17 +149,18 @@ photographing the same moment, and an `-edited` version next to its original (in
 Photos they are one item). Copies in album folders of the export are counted once, because
 Google Photos has them once.
 
-Limits: videos are matched only as identical files or by the same name and date. RAW files
-that can't be opened are matched the same way. Two frames of a perfectly still scene can't
-be told apart and are reported as the same photo.
+Limits: RAW files and videos that can't be opened are matched by name and date only. Two
+frames of a perfectly still scene can't be told apart and are reported as the same photo;
+two different videos of the same length whose scene barely changes may land in *check*.
 
-Tested on two sample exports built from real photos and video frames (`tests/` has a
+Tested on two sample photo exports built from real photos and video frames (`tests/` has a
 smaller self-contained version): the old matcher found 43 of 93 and 0 of 42 copies, the new
 one finds all of them. No screenshot that differs by one message or one switch, and no
-burst of people walking, was taken for a copy. The only look-alikes reported as the same
-photo were video frames a split second apart: identical frames, and one pair whose dates
-were hours apart. Frames dated seconds apart go to *check*. Speed: about 20 ms per
-12-megapixel photo on 4 cores; a re-run reads only new files.
+burst of people walking, was taken for a copy. Video matching was checked on real clips:
+re-encoded and re-shared copies (down to 320 px, another container) and byte-identical
+copies are all found, while different clips of the same length — including two halves of
+one source video — are not. Speed: about 20 ms per 12-megapixel photo on 4 cores; videos
+cost one ffmpeg pass each (cached afterwards), and a re-run reads only new files.
 
 ## Checks
 
